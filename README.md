@@ -3,4 +3,5 @@ I uploaded a public zip file of my QB contract-adjusted value project. It includ
 Socials:
 
 linkedin @samuelswift
+
 twitter @swiftsam10 
