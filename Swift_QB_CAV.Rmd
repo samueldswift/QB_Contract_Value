@@ -1,0 +1,573 @@
+---
+title: "Optimized Cap Management: The Impact of Quarterback Contract-Adjusted Value on Super Bowl Likelihood"
+author: "Sam Swift, Ian Perez, Ava Meissner, & Sophia Rojas"
+date: "`r format(Sys.Date(), '%5/%3/%2024')`"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+    fig_caption: true
+    highlight: tango
+---
+
+# Introduction
+
+
+Football is played between two opposing teams with eleven players each. The objective is to score points by passing or running the ball into the opponent's end zone, and the team with the most points at the end of four 15 minute quarters wins. Both team's offenses alternate possessions and have a pivotal player, the quarterback, who touches the ball every snap. The quarterback is responsible for leading the offense, communicating play calls, and making the best pass to move the ball down the field.
+
+
+The quarterback is the most essential player to a football team and generally one of the highest paid players. Therefore, teams must methodically negotiate their quarterback contracts to find a balance between playing for elite talent and having a quality team around them to work with. Our analysis focuses on quarterback performance relative to their contract, specifically their cap hit. Cap hit is the amount of money a player's contract takes up of their respective team's spending for the season. We want to determine what types of quarterback contracts lead teams to the most success, represented by appearances in the Super Bowl. Results from our analysis give NFL teams insight into use of financial resources, long-term goals and decision making, and strategies to make it into the Super Bowl. Our analysis was conducted to answer the question: What kind of quarterback contracts are the most valuable?
+
+
+# Overview of Analysis
+
+We began our analysis by importing data for current and historical NFL quarterbacks. Our data consisted of performance metrics and grades, salaries, and team spending. We cleaned the data by removing unnecessary columns and filtering out quarterbacks who did not meet a minimum snap threshold, which was 20% of the maximum number of snaps played by a single quarterback. We devised a performance metric that combined QBR, average EPA, and PFF grades to compare quarterbacks' performance from a single metric. Using our performance metric, we employed hierarchical and k-means clustering techniques to group the quarterbacks into clusters based on our performance metric and cap hit. We identified four distinct groups of quarterbacks, "Expensive Excellence", "Middle Class", "Budget Ballers", and "Duds", which will be elaborated on later in the paper. Then we created a metric, "Contract Adjusted Value" (CAV) to evaluate a quarterback's performance relative to their salary to determine their efficiency on the field relative to cost. Comparing our clusters and CAV values of current quarterbacks to those of historical quarterbacks who made it to the Super Bowl, we gained insights into how today's quarterbacks compare to those of the past, and what kinds of quarterbacks appear in the Super Bowl most frequently.
+\vspace{12pt}
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r, echo=FALSE}
+# Load necessary packages
+library(webshot2)
+```
+
+
+# Loading & Cleaning Data
+
+The data being loaded and cleaned are CSV files from nfelo.com, PFF.com, spotrac.com, and a manually created file. These files contain a number of QB stats, the most important of which are QBR, EPA/play, PFF grade, average salary, cap hit, and points determined from consensus media rankings.
+
+
+This section includes writing code that loads two datasets, selecting columns from our data, and filtering to remove players below our snap limit (which is a minimum of 20% of the maximum number of snaps by a single quarterback in the 2023 season). We manually add missing QBR values to Quarterbacks within our dataset and merge the two datasets we loaded and have been cleaning. Next, we load consensus QB rankings from popular news sites and create a new data set called "consensus" to eventually compare consensus rankings against our created QB performance stat rankings. We load and clean salary data by removing the dollar signs and NA values. Salary data is merged with the first QB dataset we created containing performance statistics. Next we format the values in the contract data correctly so that they are seen are numbers. Column names are converted to lowercase, with the exception of QBR. Finally, we write code to select the final columns we include in our data set. We call this data set "qbs_2023_final_clean".
+
+
+```{r warning=FALSE, error=FALSE, echo=FALSE}
+# Load pff, epa, and qbr data
+pff_2023 <- read.csv('passing_summary.csv')
+elo_2023 <- read.csv('QbsQbrEpa2023.csv')
+```
+
+```{r warning=FALSE, error=FALSE, echo=FALSE}
+# select important columns
+elo_2023_clean <- elo_2023 [ ,c("qb", "season", "games_started", "team", "qb_plays", "int", "td", "passing_yards", "sacks", "yards_p_att", "td_rate", "int_rate", "comp_pct", "adot", "cpoe", "total_epa", "avg_epa", "succsess_rate", "qbr_total") ]
+```
+
+```{r warning=FALSE, error=FALSE, echo=FALSE}
+# filter out players who have played fewer than 20% of the max quarterback snaps in 2023
+elo_2023_max_snap <- max(elo_2023_clean$qb_plays, na.rm = TRUE)
+elo_2023_max_snap
+elo_2023_20snaps <- 0.2*elo_2023_max_snap
+elo_2023_20snaps
+
+pff_2023_max_snap <- max(pff_2023$dropbacks, na.rm = TRUE)
+pff_2023_max_snap
+pff_2023_20snaps <- 0.2*pff_2023_max_snap
+pff_2023_20snaps
+```
+
+```{r warning=FALSE, error=FALSE, echo=FALSE}
+# implement a 20% snap minimum (relative to the QB with the most drop backs)
+snap_min_elo23 <- which(elo_2023_clean$qb_plays > elo_2023_20snaps)
+snap_min_pff23 <- which(pff_2023$dropbacks > pff_2023_20snaps)
+
+elo_2023_clean <- elo_2023_clean[snap_min_elo23, ]
+
+pff_2023 <- pff_2023[snap_min_pff23, ]
+```
+
+
+```{r warning=FALSE, error=FALSE, echo=FALSE}
+# Add missing QBR values to some quarterbacks within our data
+elo_2023_clean$qbr_total[elo_2023_clean$qb == "Daniel Jones" & is.na(elo_2023_clean$qbr_total)] <- 36.3
+elo_2023_clean$qbr_total[elo_2023_clean$qb == "C.J. Stroud" & is.na(elo_2023_clean$qbr_total)] <- 57.5
+elo_2023_clean$qbr_total[elo_2023_clean$qb == "Deshaun Watson" & is.na(elo_2023_clean$qbr_total)] <- 42.9
+elo_2023_clean$qbr_total[elo_2023_clean$qb == "Joe Flacco" & is.na(elo_2023_clean$qbr_total)] <- 48.3
+elo_2023_clean$qbr_total[elo_2023_clean$qb == "Will Levis" & is.na(elo_2023_clean$qbr_total)] <- 33.2
+elo_2023_clean$qbr_total[elo_2023_clean$qb == "Bryce Young" & is.na(elo_2023_clean$qbr_total)] <- 33.4
+elo_2023_clean$qbr_total[elo_2023_clean$qb == "Jimmy Garoppolo" & is.na(elo_2023_clean$qbr_total)] <- 33.9
+elo_2023_clean$qbr_total[elo_2023_clean$qb == "Aidan O'Connell" & is.na(elo_2023_clean$qbr_total)] <- 40.5
+elo_2023_clean$qbr_total[elo_2023_clean$qb == "Tommy DeVito" & is.na(elo_2023_clean$qbr_total)] <- 23.7
+elo_2023_clean$qbr_total[elo_2023_clean$qb == "Nick Mullens" & is.na(elo_2023_clean$qbr_total)] <- 49.8
+elo_2023_clean$qbr_total[elo_2023_clean$qb == "Tyrod Taylor" & is.na(elo_2023_clean$qbr_total)] <- 47.7
+elo_2023_clean$qbr_total[elo_2023_clean$qb == "Easton Stick" & is.na(elo_2023_clean$qbr_total)] <- 51.0
+elo_2023_clean$qbr_total[elo_2023_clean$qb == "Bailey Zappe" & is.na(elo_2023_clean$qbr_total)] <- 23.3
+elo_2023_clean$qbr_total[elo_2023_clean$qb == "Taylor Heinicke" & is.na(elo_2023_clean$qbr_total)] <- 47.7
+```
+
+```{r warning=FALSE, error=FALSE, echo=FALSE}
+# combine datasets 
+qbs_2023 <- merge(elo_2023_clean, pff_2023, by.x = "qb", by.y = "player")
+qbs_2023 <- na.omit(qbs_2023)
+```
+
+
+```{r, echo=FALSE}
+# import consensus rankings
+qbr_rank <- read.csv('2023_qbr_rank.csv')
+qbr_rank <- na.omit(qbr_rank)
+
+consensus <- merge(qbs_2023, qbr_rank, by.x = "qb", by.y = "Player") 
+```
+
+
+```{r, echo=FALSE}
+# Read salary data
+qb_money_23 <- read.csv('qb_money_2023.csv')
+
+# remove NA columns
+qb_money_23 <- qb_money_23[, colSums(is.na(qb_money_23)) < nrow(qb_money_23)]
+```
+
+
+```{r, echo=FALSE}
+# merge qb money with qb stats
+qbs_2023_final <-  merge(qbs_2023, qb_money_23, by.x = "qb", by.y = "PLAYER")
+
+# drop unneeded columns
+qbs_2023_final <- qbs_2023_final[, -which(names(qbs_2023_final) %in% c("aimed_passes", "avg_depth_of_target", "btt_rate", "declined_penalties", "def_gen_pressures", "dropbacks", "drops", "first_downs", "hit_as_threw", "penalties", "passing_snaps", "big_time_throws", "franchise_id", "spikes"))]
+```
+
+
+```{r, echo=FALSE}
+# remove "$" and commas in average salary and convert to numeric
+qbs_2023_final$AVG_2023_CONTRACT_SALARY <- as.numeric(gsub("[^0-9.]", "", qbs_2023_final$AVG_2023_CONTRACT_SALARY))
+
+# remove "$" and commas in cap hit and convert to numeric
+qbs_2023_final$CAP_HIT_2023 <- as.numeric(gsub("[^0-9.]", "", qbs_2023_final$CAP_HIT_2023))
+```
+
+```{r, echo=FALSE}
+# Convert column names to lowercase
+colnames(qbs_2023_final) <- tolower(colnames(qbs_2023_final))
+
+# Make "qbr_total" column name uppercase "QBR"
+colnames(qbs_2023_final)[colnames(qbs_2023_final) == "qbr_total"] <- "QBR"
+```
+
+
+```{r, echo=FALSE}
+qbs_2023_final_clean <- qbs_2023_final[ ,c("qb", "age", "cap_hit_rank", "cap_hit_2023", "avg_2023_contract_salary", "QBR", "avg_epa", "total_epa", "grades_offense", "season", "games_started", "team", "qb_plays", "int", "td", "passing_yards", "sacks.x", "yards_p_att", "td_rate", "int_rate", "comp_pct", "adot", "cpoe", "succsess_rate", "attempts", "avg_time_to_throw", "drop_rate", "grades_pass", "grades_run", "pressure_to_sack_rate") ]
+
+# this "vibes_reference" stat uses any stat not included in "vibes" to be a measure of how good "vibes" is. We no longer use it in our actual analysis because we now compare "vibes" to consensus rankings.
+qbs_2023_final_clean$vibes_reference <- (100*qbs_2023_final_clean$td_rate)+(100-(100*qbs_2023_final_clean$int_rate))+(100-qbs_2023_final_clean$pressure_to_sack_rate)+(0.1*qbs_2023_final_clean$grades_run)+(qbs_2023_final_clean$yards_p_att)
+```
+
+# QB Performance Metric
+
+Now that our data is loaded and cleaned up, we create our QB performance metric below by assigning weights to QBR, PFF Grade, and EPA/play. We chose the weights of .55, .5, and 30, respectively, in attempts to more evenly balance the effect of each stat on the final performance metric. EPA/play ranges from -.33 to .33, so multiplying this scale by 30 helps increase it's impact on our metric when compared to QBR (73 to 23) and PFF grade (92 to 52). The following plot is a linear model showing the relationship between our final weighted QB performance metric and the media consensus rankings from the 2023 season. 
+
+\vspace{12pt}
+```{r, echo=FALSE}
+# compare vs consensus rankings
+consensus$vibes <- (0.5*consensus$grades_offense)+(0.55*consensus$QBR)+(30*consensus$avg_epa)
+qbs_2023_final_clean$vibes <- (0.5*qbs_2023_final_clean$grades_offense)+(0.55*qbs_2023_final_clean$QBR)+(30*qbs_2023_final_clean$avg_epa)
+
+
+g=lm(formula=rank_points~vibes, data = consensus)
+g
+plot(consensus$vibes, consensus$rank_points,xlab="QB Performance Metric ",ylab="Consensus QB Rankings")
+abline(g,col="red")
+summary(g)
+```
+Below, we check for normally distributed errors and outliers in our QB performance data by plotting a few graphs.
+
+```{r, echo=FALSE}
+plot(g)
+```
+When looking at the plot of residuals vs. fitted values, the data appears to be randomly scattered around the horizontal line of 0 (aka errors are normally distributed), which indicates that our use of a linear model is reasonable. The Q-Q plot appears to back this up, as the data follows pretty closely along the diagonal line shown. The Scale-Location plot is evenly spread, suggesting variance of residuals are consistent or homoscedastic across different levels of the fitted values. Finally, all points in the Residuals vs. Leverage plot fall inside Cook's distance lines, meaning there are no highly influential outliers affecting this model. 
+
+From these checks, we know that our data is possible to do linear regression on. 
+
+Our analysis (as seen above) involved comparing the rankings generated by our own performance metric to the consensus rankings from the media to see how closely our methods aligned with what experts in the field think. We obtained an adjusted R^2 value of 0.899, telling us that our performance metric explains nearly 90% of the variation in the media rankings. This means that our metric is almost 90% accurate in capturing what experts think about quarterback performances. This demonstrates the validity and reliability of our metric and its ability to evaluate quarterback performance. 
+
+
+Next, we start the process of visualizing QB performance. The following plot shows the distribution of our QB performance metric, it is slightly skewed left. This tells us that our performance stat cannot accurately be put into terms of percentiles. Because percentiles don't work, the code below creates z-scores for QB performance instead. This metric allows us to understand where each QB falls within this distribution. A value of 0 for z-scores means the quarterback performs just like the average quarterback, while a value of 1 means the quarterback has performance that is 1 standard deviation above the mean.
+
+```{r, echo=FALSE}
+# check histogram for approx. normal distribution
+hist(qbs_2023_final_clean$vibes, main = paste("QB Performance Metric Distribution"))
+
+# create percentile metric
+qbs_2023_final_clean$performance_percentile <- rank(qbs_2023_final_clean$vibes) / length(qbs_2023_final_clean$vibes) * 100
+
+# create z-score metric
+qbs_2023_final_clean <- transform(qbs_2023_final_clean, performance_z_score = scale(vibes, center = TRUE, scale = TRUE))
+```
+
+Before moving on, we load some useful libraries that will help us run the code and graph results.
+
+```{r message=FALSE, warning=FALSE, echo=FALSE}
+library(ggplot2)
+library(plotly)
+library(gridExtra)
+library(leaps)
+library(psych)
+library(NbClust)
+library(sqldf)
+```
+
+
+# Creating Contract-Adjusted Values
+
+The first attempt at creating our Contract-Adjusted Value weighted contract value (cap hit) too heavily because its range is in the millions with lots of variability, whereas our QB performance metric ranges from roughly 20 to 100. To fix this, we weighted our performance metric exponentially.
+\vspace{12pt}
+
+Code used to take contract cap hit as a percent of the salary cap:
+`qbs_2023_final_clean$contract_percent_cap <- \frac{qbs_2023_final_clean$cap_hit_2023}{224800000}`
+
+Code used to create contract adjusted value:
+`qbs_2023_final_clean$contract_adj_value <- \frac{(qbs_2023_final_clean$vibes)^{100}}{qbs_2023_final_clean$contract_percent_cap} \div 90^{100}`
+
+```{r, echo=FALSE}
+# take contract cap hit as a percent of the salary cap
+qbs_2023_final_clean$contract_percent_cap <- qbs_2023_final_clean$cap_hit_2023 / 224800000
+
+# create contract adjusted value
+qbs_2023_final_clean$contract_adj_value <- ((qbs_2023_final_clean$vibes)^100 / qbs_2023_final_clean$contract_percent_cap ) / 90^100
+```
+
+
+
+The histogram below is a visual representation of how much of an outlier Brock Purdy is as both the highest-performing QB and lowest-paid starter. He broke the histogram by being so far and away the best value contract that every other QB was grouped together on the low end. Because of this, we know that percentile values won't have any interpretability. Rather, they have the simple functionality displaying the ranking of quarterbacks relative to each other on a more closely grouped scale.
+
+\vspace{12pt}
+```{r, echo=FALSE}
+# check distribution
+hist(qbs_2023_final_clean$contract_adj_value, main = paste('Distribution of Contract-Adjusted Value'))
+
+```
+The code below creates non-interpretable percentiles for contract-adjusted value.
+
+```{r, echo=FALSE}
+qbs_2023_final_clean$CAV_percentile <- rank(qbs_2023_final_clean$contract_adj_value) / length(qbs_2023_final_clean$contract_adj_value) * 100
+```
+
+Now that we have percentiles, which scale contract adjusted values to be closer together, we created a plot to show our QB rankings for CAV. 
+\vspace{12pt}
+```{r, fig.align = "center", echo=FALSE}
+sorted_df <- qbs_2023_final_clean[order(-qbs_2023_final_clean$CAV_percentile), ]
+
+# Create a bar plot with rotated x-axis labels
+ggplot(sorted_df, aes(x = reorder(qb, -CAV_percentile), y = CAV_percentile)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  labs(title = "Contract Adjusted Value Percentile Rank by QB",
+       x = "QB", y = "Percentile Rank") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+# Clustering 2023 QBs by Performance and Salary Cap
+
+Clustering: QB Performance vs Cap Hit (as a percentage of that year's salary cap)
+
+
+Clustering is a method used to group data by how similar they are based on their proximity to each other. The process and code needed for clustering, which we will repeat later for the historical Super Bowl QB data, begins with getting a feel for the variables we are interested in. We do this by plotting histograms, scatter plots, and density plots. This will guide us in our clustering approach. 
+
+The graphs below show relationships between each variable in a compact way. It's important to note that each variable corresponds to a row and a column. For example, all scatter plots relating to contract_adj_value can be found in column 1, while the strength of each linear relationship between contract_adj_value and each of the other variables can be found in row 1. Information about our performance metric, aka 'vibes', can be found in column 2 as well as row 2 (and so on). The scatter plots include confidence ellipses, which show where data should lie with a 95% confidence level. A narrow ellipse indicates a strong linear relationship, while circular ellipses indicate weaker relationships between the two variables. The diagonal gives a visual of the density plot for each variable. 
+
+When it comes to clustering, these visualizations are helpful in finding outliers, skew, and assessing the scale of variables to pick the right clustering method. Outliers may be those that don't fall within the ellipses, or fall far from the general cloud of points. It's clear there is an outlier within our contract adjusted value stat (Brock Purdy). You can see the scale for each variable around the outside of the chart.
+
+```{r, echo=FALSE}
+pairs.panels(x = qbs_2023_final_clean[, c('contract_adj_value', 'vibes', 'cap_hit_2023', 'age')],
+             ellipses = TRUE,	
+             lm=FALSE, 	
+             smooth = TRUE,	
+             show.points = TRUE, 	
+             density = TRUE,
+             hist.col = "dodgerblue",
+             breaks = 10		
+)
+```
+
+We are interested in using k-means clustering to cluster QB performance (vibes) vs. cap hit (cap_hit_2023), so our focus is on the middle four squares where we see their relationship. In order to most effectively use k-means clustering, we must have a roughly linear relationship between our variables, and spherical clumps of data. The scatter plot shows a roughly linear relationship, and we see a correlation coefficient of .49. There appears to be a couple groupings of data that can be put into spheres as well. However, because k-means clustering is sensitive to the magnitude of variables, our variable scales must be normalized (preferably without outliers) While we did not detect an outlier, notice that the scale of 'vibes' is way smaller than the 'cap_hit_2023' scale. This tells us we must scale our variables before clustering.
+
+We scaled the data using min-max scaling (replacing each value with a number from 0 to 1, where a 0 indicates it is the smallest value in the data set and a 1 indicates the greatest). We used this scaling instead of percentile scaling because the performance metric and cap hit variables are not normally distributed (shown by the skew in the density plots). 
+
+
+\vspace{12pt}
+```{r, echo=FALSE}
+# scale variables to compare our performance metric to a qb's salary cap hit
+qbs_2023_final_clean$qb_performance_scaled <- qbs_2023_final_clean$vibes/range(qbs_2023_final_clean$vibes)[2]
+
+# cap hit scaled 
+qbs_2023_final_clean$cap_hit_scaled <- qbs_2023_final_clean$cap_hit_2023/range(qbs_2023_final_clean$cap_hit_2023)[2]
+```
+
+
+
+```{r, echo=FALSE}
+# determine the best number of clusters among indices
+hca.fit <- NbClust(data = qbs_2023_final_clean[,c('qb_performance_scaled', 'cap_hit_scaled')],
+				distance = "euclidean", 
+				method = "ward.D",
+				index="all")
+```
+\vspace{12pt}
+Now that our data is scaled properly, we used the "NbClust" function to find the suggested optimal number of clusters for our data (seen above). According to the majority rule, the best number of clusters is two, however, given the diversity of quarterback performance, we chose to do four clusters to capture a more nuanced understanding of quarterback contracts. Given our prior knowledge of football and our intentions to classify quarterbacks into groups regarding their performance and salary, we believe having four clusters enables more valuable insights that can be used in roster management decisions.
+
+\vspace{12pt}
+```{r, echo=FALSE}
+# this code chunk gives us our distance matrix
+d.matrix <- dist(x= qbs_2023_final_clean[,c('qb_performance_scaled', 'cap_hit_scaled')], method="euclidean")
+#d.matrix
+```
+
+We continue our clustering by creating a matrix of distances between points for the purpose of figuring out which points in the data set are nearest, and therefore, should be clustered. Next, we fit the model.
+
+```{r, echo=FALSE}
+# This chunk fits our model
+hclust.fit <- hclust(d=d.matrix, method="ward.D")
+#hclust.fit
+```
+
+
+The code below assigns 4 clusters to our data using the scaled variables we created. 
+```{r, echo=FALSE}
+#this chunk assigns 4 clusters (c1 through c4)
+qbs_2023_final_clean$mem3 <- cutree(hclust.fit, k=4)
+
+c1mean <- c(mean(qbs_2023_final_clean$qb_performance_scaled[qbs_2023_final_clean$mem3==1]),
+			mean(qbs_2023_final_clean$cap_hit_scaled[qbs_2023_final_clean$mem3==1])
+			)
+
+c2mean <- c(mean(qbs_2023_final_clean$qb_performance_scaled[qbs_2023_final_clean$mem3==2]),
+			mean(qbs_2023_final_clean$cap_hit_scaled[qbs_2023_final_clean$mem3==2])
+			)
+
+c3mean <- c(mean(qbs_2023_final_clean$qb_performance_scaled[qbs_2023_final_clean$mem3==3]),
+			mean(qbs_2023_final_clean$cap_hit_scaled[qbs_2023_final_clean$mem3==3])
+			)
+
+c4mean <- c(mean(qbs_2023_final_clean$qb_performance_scaled[qbs_2023_final_clean$mem3==4]),
+			mean(qbs_2023_final_clean$cap_hit_scaled[qbs_2023_final_clean$mem3==4])
+			)
+
+qb_centroids <- rbind(c1mean, c2mean, c3mean, c4mean)
+qb_centroids
+```
+
+
+```{r, echo=FALSE}
+kmeans.fit <- kmeans(x=qbs_2023_final_clean[ ,c('qb_performance_scaled', 'cap_hit_scaled')], 
+					centers=qb_centroids)
+
+```
+
+Plot of Clustered 2023 Quarterbacks
+
+This graph compares the performance of quarterbacks to their cap hit in the 2023 season. Each cluster, color-coded and labeled, represents a group of quarterbacks with similar characteristics in terms of their performance and financial impact on the team. Performance in the first graph below is shown in terms of the z-scores we created earlier, where 0 is average. The second visual graphs the performance metric vs. cap hit in terms of raw numbers. “Duds” are grouped as low salary and low performing quarterbacks. “Budget Ballers” represents low salary and high performance quarterbacks. “Expensive Excellence” quarterbacks, shown in blue, represent the highest performing quarterbacks (on average) who are paid large salaries. “Middle Class” quarterbacks are grouped as middle pay quarterbacks with varied performance.
+\vspace{12pt}
+\vspace{12pt}
+
+```{r, fig.align='center',echo=FALSE}
+# Assign the clusters and graph z-score performance
+qbs_2023_final_clean$kmem3 <- factor(kmeans.fit$cluster, labels = c('Duds', 'Budget Ballers', 'Expensive Excellence', 'Middle Class'))
+
+
+ggplotly(ggplot(qbs_2023_final_clean, aes(x=contract_percent_cap*100, y=performance_z_score, col = kmem3, text = qb)) + geom_point() + labs(x= "Percent Cap Hit", y = "QB Performance Z-Score",title ='2023 NFL QB Clusters for Performance & Salary') + scale_color_manual(values=c("red", "seagreen3","dodgerblue", "purple"), name = "Clusters")) 
+
+# Graph raw performance
+qbs_2023_final_clean$kmem3 <- factor(kmeans.fit$cluster, labels = c('Duds', 'Budget Ballers', 'Expensive Excellence', 'Middle Class'))
+
+
+ggplotly(ggplot(qbs_2023_final_clean, aes(x=contract_percent_cap*100, y=vibes, col = kmem3, text = qb)) + geom_point() + labs(x= "Percent Cap Hit", y = "QB Performance",title ='2023 NFL QB Clusters for Performance & Salary') + scale_color_manual(values=c("red", "seagreen3","dodgerblue", "purple"), name = "Clusters")) 
+```
+
+Finally, we have our clusters! 
+
+
+
+# Repeat for Past Super Bowl Attending Quarterbacks  
+
+The next step is to repeat the clustering process with quarterbacks that have made the Super Bowl in the last 18 years (the time span with available data for QBR, EPA/play, and PFF grade). This will provide insight into which cluster of QB contracts and performance have the highest rate of making the super bowl. 
+
+We first bring in our last csv data file of the last 18 years of Super Bowl attending QBs and then create contract adjusted value for historic QBs.
+
+```{r, echo=FALSE}
+# read historic qbs csv
+historic <- read.csv('historic_qb.csv')
+
+# performance stat with regular season pff grade
+historic$vibes <- (0.5*historic$reg_pff_grade)+(0.55*historic$qbr_total)+(30*historic$avg_epa)
+
+# performance stat with postseason pff grade
+historic$playoff_vibes <- (0.5*historic$playoff_pff_grade)+(0.55*historic$qbr_total)+(30*historic$avg_epa)
+```
+
+```{r, echo=FALSE}
+# create contract adjusted value
+historic$contract_adj_value <- ((historic$vibes)^100 / historic$cap_hit_percent_higher ) / 90^100
+```
+
+
+Once again, we check for normality in the distribution (which we don't have).
+```{r, fig.align='center',echo=FALSE}
+# check for normal distribution
+hist(historic$vibes, main = paste('Distribution of Performance for Super Bowl QBs'))
+hist(historic$playoff_vibes, main = paste('Distribution of Playoff Performance for Super Bowl QBs'))
+```
+
+Because the distribution isn't normal, we once again create z-scores for performance. Like we mentioned before, the process of clustering begins with getting a feel for the variables we are interested in. We do this by plotting histograms and other panels of information. This will guide us in what clustering approach we use. 
+
+
+```{r, echo=FALSE}
+# not a normal distribution
+# create z-score column for regular season performance
+historic <- transform(historic, performance_z_score = scale(vibes, center = TRUE, scale = TRUE))
+
+# create z-score column for playoff performance (not used in our final analysis)
+historic <- transform(historic, playoff_performance_z_score = scale(playoff_vibes, center = TRUE, scale = TRUE))
+```
+
+
+\vspace{12pt}
+```{r, fig.align='center', echo=FALSE}
+pairs.panels(x = historic[, c('contract_adj_value', 'vibes', 'cap_hit_percent_higher')],
+             ellipses = TRUE,	
+             lm=FALSE, 	
+             smooth = TRUE,	
+             show.points = TRUE, 	
+             density = TRUE,
+             hist.col = "dodgerblue",	
+             breaks = 10		
+)
+```
+
+
+
+Once more, we have to scale each of our variables. Because the salary cap is different over the last 18 years, we took cap hit as a percentage of that year's salary cap. However, there is more nuance to our process, because each team has a different salary cap each year (teams are allowed to roll over up to 5% of unused cap from the previous year if they have it). To account for this, instead of just looking at the league salary cap, we took the max of the league salary cap and what an individual team spent that year in terms of cap. 
+
+\vspace{12pt}
+```{r, echo=FALSE}
+# scale variables
+
+# scale performance (vibes)
+historic$qb_performance_scaled <- historic$vibes/range(historic$vibes)[2]
+
+# scale performance (playoff vibes)
+historic$qb_playoff_performance_scaled <- historic$vibes/range(historic$vibes)[2]
+
+# cap hit as a percent of the max between spending and salary cap scaled 
+historic$cap_hit_scaled <- historic$cap_hit_percent_higher/range(historic$cap_hit_percent_higher)[2]
+```
+
+We again used the "NbClust" function to find the suggested optimal number of clusters for our data. According to majority rule, the best number of clusters is fifteen, however, that many clusters doesn't provide many valuable insights when considering that many players would be part of their own cluster. We wanted to create the same number of clusters that we made for present day QBs so we could more easily compare and determine which clusters appear most frequently among super bowl QBs.
+\vspace{12pt}
+```{r, echo=FALSE}
+hca.fit <- NbClust(data = historic[,c('qb_performance_scaled', 'cap_hit_scaled')],
+				distance = "euclidean", 
+				method = "ward.D",
+				index="all")
+```
+
+```{r, echo=FALSE}
+#this code chunk gives us our distance matrix
+d.matrix <- dist(x= historic[,c('qb_performance_scaled', 'cap_hit_scaled')], method="euclidean")
+#d.matrix
+```
+
+```{r, echo=FALSE}
+#This chunk fits our model!
+hclust.fit <- hclust(d=d.matrix, method="ward.D")
+#hclust.fit
+```
+
+```{r, echo=FALSE}
+#this chunk assigns clusters!
+historic$mem3 <- cutree(hclust.fit, k=4)
+
+c1mean <- c(mean(historic$qb_performance_scaled[historic$mem3==1]),
+			mean(historic$cap_hit_scaled[historic$mem3==1])
+			)
+
+c2mean <- c(mean(historic$qb_performance_scaled[historic$mem3==2]),
+			mean(historic$cap_hit_scaled[historic$mem3==2])
+			)
+
+c3mean <- c(mean(historic$qb_performance_scaled[historic$mem3==3]),
+			mean(historic$cap_hit_scaled[historic$mem3==3])
+			)
+
+c4mean <- c(mean(historic$qb_performance_scaled[historic$mem3==4]),
+			mean(historic$cap_hit_scaled[historic$mem3==4])
+			)
+
+qb_centroids <- rbind(c1mean, c2mean, c3mean, c4mean)
+qb_centroids
+```
+
+
+```{r, echo=FALSE}
+kmeans.fit <- kmeans(x=historic[ ,c('qb_performance_scaled', 'cap_hit_scaled')], 
+					centers=qb_centroids)
+
+```
+
+
+After performing the same clustering techniques as we used with 2023 QB data, we graphed our results for historical super bowl QBs below. Only 6 out of 36 QBs have made the super bowl with performance 1 standard deviation below the mean (or lower) over the last 18 years. Cluster wise, 44% of historic Super Bowl QBs have been part of the middle class. We believe this cluster is being underutilized, given that only 13% of quarterbacks fall into this cluster. Lastly, we see that four out of five QBs in the "Expensive Excellence" cluster (with cap hit above 12.5% of the salary cap) have a performance z-score that is around 1 standard deviation above the mean. The Super Bowl QB data set has overall higher performance than the distribution of any individual season of QBs, thus our threshold of performance for expensive players is 1 standard deviation above the previous seasons' mean. For this reason, we recommend avoiding paying QBs contracts that earn over 12.5% of the salary cap if their performance is below 1 standard deviation above the mean (when looking at current year z-scores). 
+\vspace{12pt}
+```{r, fig.align='center',echo=FALSE}
+# Assign the clusters and graph z-score performance
+historic$kmem3 <- factor(kmeans.fit$cluster, labels = c('Expensive Excellence', 'Budget Ballers', 'Middle Class', 'Duds'))
+
+
+ggplotly(ggplot(historic, aes(x=cap_hit_percent_higher*100, y=performance_z_score, col = kmem3, text = paste("QB:", qb, "<br>Season:", season, "<br>Result:", result))) + geom_point() + labs(x= "Percent Cap Hit", y = "QB Performance Z-Score",title ='Historical Super Bowl QB Performance & Salary') + scale_color_manual(values=c("dodgerblue", "seagreen3","purple", "red"), name = "Clusters"))
+
+# graph raw performance
+historic$kmem3 <- factor(kmeans.fit$cluster, labels = c('Expensive Excellence', 'Budget Ballers', 'Middle Class', 'Duds'))
+
+
+ggplotly(ggplot(historic, aes(x=cap_hit_percent_higher*100, y=vibes, col = kmem3, text = paste("QB:", qb, "<br>Season:", season, "<br>Result:", result))) + geom_point() + labs(x= "Percent Cap Hit", y = "QB Performance",title ='Historical Super Bowl QB Performance & Salary') + scale_color_manual(values=c("dodgerblue", "seagreen3","purple", "red"), name = "Clusters"))
+```
+
+# Historical Super Bowl QBs vs. Present Day QBs Graph
+
+Finally, we plot Historical Super Bowl QBs compared to current QBs on the same graph (this time with our raw QB performance statistic on the y-axis) and find a threshold of performance for the majority of quarterbacks that make the Super Bowl. This threshold is around a value of 80 in our statistic, given that 78% of Super Bowl QBs over the last 18 years clear this mark. It's interesting to note that only 24% of present day QBs clear this mark. Additionally, only one quarterback below this threshold but earning more than 10% of the salary cap has made the Super Bowl in the last 18 years. For this reason, we recommend avoiding to offer "Expensive" contracts (above 10% cap hit) to players below a QB performance of 80. 
+\vspace{12pt}
+```{r, echo=FALSE}
+# Load necessary packages
+library(ggplot2)
+
+# Create scatter plot for raw performances on the same scale
+ggplot() +
+  geom_point(data = historic, aes(x = cap_hit_percent_higher*100, y = vibes, color = "Historical"), alpha = 0.5) +
+  geom_point(data = qbs_2023_final_clean, aes(x = contract_percent_cap*100, y = vibes, color = "2023"), alpha = 0.5) +
+  geom_hline(yintercept = 80, color = "black") +
+  labs(x = "Percent of Salary Cap", y = "QB Performance", title = "Comparison of QB Performance and Salary Cap") +
+  scale_color_manual(values = c("Historical" = "blue", "2023" = "red"), name = "QB Group",
+                     labels = c("2023 Season", "Historically made Super Bowl")) + # Add legend
+  theme_minimal()
+```
+
+
+# Main Takeaways
+
+Teams can make Super Bowls regardless of the contract amount dished out to the quarterback, but assuming a minimum threshold of performance for each contract level. 
+
+Breaking down the thresholds for each level of contract, we would argue that quarterbacks making over 12.5% of the salary cap in a given year must have a performance that is at least 1 standard deviation above the mean performance that year for the contract to be conducive to a Super Bowl appearance. If they aren’t that high of a performer, we don’t believe they should be paid this level of a contract (assuming every team’s goal is making the Super Bowl). We came to this conclusion because 4/5 QBs who have made a Super Bowl and made over 12.5% of the salary cap had a performance around 1 standard deviation above the mean of historical Super Bowl QBs (or performance metric greater than 95). This means these high paid quarterbacks must be strongly outperforming the average performance of super bowl attending QBs to have the best chance at making the super bowl. The one exception to this rule is Patrick Mahomes in 2023, however in 2022 he’s one of the 4 making above 12.5% that made the super bowl. Therefore, because he’s already proven he can perform at that level, he’s worth the contract (whatever market-value is for the top QBs). 
+
+Looking at the “Middle Class” cluster of Quarterbacks, which ranges between contracts that take up between 6-12.5% of the salary cap in a given season, the threshold of performance is at the mean performance of historical Super Bowl QBs (or performance metric greater than 84). This means these middle-paid quarterbacks must be performing at least at the average performance of super bowl attending QBs to have the best chance at making the super bowl. By this threshold, historical QBs that are exceptions to this rule include Jimmy Garoppolo, Joe Flacco, Eli Manning (x2), and Peyton Manning in his 2015 season, where he was benched in week 10 for Brock Osweiler after starting the season with 9 TDs and 17 Interceptions. As for our recommendation on spending, if performance is roughly average (not a hard cut-off), then go ahead and pay the quarterback a salary within this range of the cap. 
+
+Finally, when looking at the “Budget Ballers” class of QBs, where contract cap hits range from 0-6% of the salary cap, the threshold of performance at least -0.4 standard deviations below the mean performance of historical Super Bowl QBs (or performance metric greater than 78). This means these cheap quarterbacks still must have a minimum level of performance compared to super bowl attending QBs to have the best chance at making the super bowl. If a QB falls below this threshold, it doesn’t necessarily mean you must move off of them as a QB. Rather, you must see potential for growth in performance enough to jump above the performance threshold of 78 (while still on their cheap contract). Oftentimes, this scenario is common for young QBs that were just drafted. C.J. Stroud is a great example of a quarterback that falls into this category, considering that his performance metric was 76.6, falling just below the threshold. He achieved this level of performance in his rookie season, so it’s fair to project that he has a good shot of eclipsing the required threshold next season. The only two exceptions to this rule are Nick Foles (who only started 3 regular season games and played fantastic in the playoffs), and Rex Grossman in 2006, when Devin Hester had 5 kick return TDs and the Bears defense led the league in takeaways.
+
+
+
+# Results in Context
+
+Our analysis helps team coaches and managers evaluate quarterback performance beyond traditional statistics like passing yards or touchdowns thrown. Using CAV, team managers can identify quarterbacks who provide the most value to a team relative to their salary. This information can be used in decisions regarding contract negotiations, player trades, and starting lineups. For example, quarterbacks in the "Expensive Excellence" cluster provide outstanding performance but demand higher salaries, making them attractive options for teams with plenty of salary cap space and a need for talent. Teams with budget constraints might be more attracted to the "Budget Ballers" cluster, in which players provide solid performance at a lower cost.
+
+
+# Recommendations for Future Work
+
+Building upon our current progress, we'd like to offer a few suggestions. Our current performance metric uses QBR, EPA, and PFF grade to determine quarterback effectiveness. Adding either internal team-specific scouting department evaluations or a combination of simple and advanced stats into the model may improve the performance metric by accounting for a more comprehensive range of factors influencing quarterback performance. 
+
+This model identified four distinct clusters: "Budget Ballers," "Buds," "Middle Class," and "Expensive Excellence." However, the "Middle Class" cluster exhibited a wide spectrum of performance. Therefore, further refinement could involve dividing this cluster into two or possibly three separate clusters, thereby enhancing the accuracy of the model. 
+
+We don't currently factor QB age and regression of performance or the length of contracts (which cause cap hits to look better as the seasons go by and the NFL salary cap goes up) into our analysis, but these are also important considerations. It would be interesting to look into predicting the age cliff for different players. Looking at how strategies for spreading money out over a contract might impact Super Bowl odds from one year to the next may also provide an edge. One last suggestion to further our analysis is to incorporate a third axis into the clustering model to introduce an additional layer of depth. One proposal for this addition would be to include the average salary as a factor, which could help illuminate any disparities within the data.
+
+In the future, similar models could be built for other positions to determine if those players are getting paid too much or too little for their performance.
+
+
+
+
